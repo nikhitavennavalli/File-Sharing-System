@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cloud-Based File Sharing System</title>
+
+  <!-- Firebase Compat SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 750px; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+    h2, h3 { color: #2c3e50; text-align: center; }
+    .card { border: 1px solid #e1e8ed; border-radius: 8px; padding: 20px; margin-bottom: 20px; background: #fafbfc; }
+    label { font-weight: 600; display: block; margin-top: 10px; margin-bottom: 5px; color: #555; }
+    input, select, button { width: 100%; padding: 10px; margin-bottom: 12px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
+    button { background-color: #007bff; color: white; font-weight: bold; border: none; cursor: pointer; }
+    button:hover { background-color: #0056b3; }
+    .btn-secondary { background-color: #6c757d; }
+    .btn-secondary:hover { background-color: #5a6268; }
+    .btn-success { background-color: #28a745; }
+    .btn-success:hover { background-color: #218838; }
+    .btn-danger { background-color: #dc3545; }
+    .btn-danger:hover { background-color: #bd2130; }
+    .file-item { padding: 15px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+    .badge { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 5px; }
+    .bg-public { background: #28a745; }
+    .bg-private { background: #dc3545; }
+    .bg-restricted { background: #ffc107; color: #333; }
+    .bg-timelimited { background: #17a2b8; }
+    .auth-status { text-align: right; font-size: 14px; margin-bottom: 15px; }
+    .hidden { display: none; }
+    .action-btn { width: auto; padding: 6px 12px; margin: 2px; display: inline-block; font-size: 13px; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <h2>Cloud File Sharing System</h2>
+
+    <!-- User Auth Status Bar -->
+    <div id="authBar" class="auth-status hidden">
+      Logged in as: <strong id="userEmail"></strong> 
+      <button onclick="logout()" class="btn-danger" style="width: auto; padding: 5px 10px; margin-left: 10px;">Logout</button>
+    </div>
+
+    <!-- Direct Shared File Link Viewer View -->
+    <div id="sharedLinkCard" class="card hidden" style="border: 2px solid #007bff;">
+      <h3 style="color: #007bff;">🔗 Sharable File Link Access</h3>
+      <div id="sharedLinkDetails">Loading file from share link...</div>
+    </div>
+
+    <!-- Auth Module (Login / Register) -->
+    <div id="authCard" class="card">
+      <h3 id="authTitle">User Login</h3>
+      <input type="email" id="authEmail" placeholder="Enter Email">
+      <input type="password" id="authPassword" placeholder="Enter Password">
+      
+      <button id="authPrimaryBtn" onclick="login()">Login</button>
+      <button class="btn-secondary" id="authToggleBtn" onclick="toggleAuthMode()">Need an account? Register</button>
+    </div>
+
+    <!-- File Upload Section -->
+    <div id="uploadCard" class="card hidden">
+      <h3>Upload File to Cloud Storage</h3>
+      <label for="fileInput">Select File (Max 1 MB):</label>
+      <input type="file" id="fileInput">
+
+      <label for="accessLevel">Access Control Policy:</label>
+      <select id="accessLevel" onchange="toggleRestrictedEmailInput()">
+        <option value="Public">Public (Anyone with link)</option>
+        <option value="Private">Private (Owner Only)</option>
+        <option value="Restricted">Restricted (Specific Allowed User)</option>
+        <option value="TimeLimited">Time-Limited (Expires in 60 Days)</option>
+      </select>
+
+      <div id="restrictedEmailGroup" class="hidden">
+        <label for="allowedEmail">Allowed User Email:</label>
+        <input type="email" id="allowedEmail" placeholder="user@example.com">
+      </div>
+
+      <button onclick="uploadFile()">Upload File</button>
+      <div id="uploadStatus" style="margin-top: 10px; font-weight: bold; text-align: center;"></div>
+    </div>
+
+    <!-- File List Section -->
+    <div class="card">
+      <h3>Cloud Files Repository</h3>
+      <button onclick="fetchFiles()" class="btn-secondary">Refresh File List</button>
+      <div id="fileList" style="margin-top: 15px;">Login or click refresh to load files...</div>
+    </div>
+  </div>
+
+  <script>
+    // Firebase Configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyDC7LE-5hLUrcm9A-CGH9_4iBN0Rv3OWKw",
+      authDomain: "file-sharing-system-4d1bb.firebaseapp.com",
+      projectId: "file-sharing-system-4d1bb",
+      storageBucket: "file-sharing-system-4d1bb.firebasestorage.app",
+      messagingSenderId: "791677454312",
+      appId: "1:791677454312:web:eb717216ddb3d11510465d",
+      measurementId: "G-11L3JWP1HH"
+    };
+
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+
+    let currentUser = null;
+    let isRegisterMode = false;
+
+    // Monitor Authentication State
+    auth.onAuthStateChanged(user => {
+      currentUser = user;
+      if (user) {
+        document.getElementById("authCard").classList.add("hidden");
+        document.getElementById("uploadCard").classList.remove("hidden");
+        document.getElementById("authBar").classList.remove("hidden");
+        document.getElementById("userEmail").innerText = user.email;
+      } else {
+        document.getElementById("authCard").classList.remove("hidden");
+        document.getElementById("uploadCard").classList.add("hidden");
+        document.getElementById("authBar").classList.add("hidden");
+      }
+      
+      checkSharableLink();
+      fetchFiles();
+    });
+
+    function toggleAuthMode() {
+      isRegisterMode = !isRegisterMode;
+      document.getElementById("authTitle").innerText = isRegisterMode ? "Register Account" : "User Login";
+      document.getElementById("authPrimaryBtn").innerText = isRegisterMode ? "Register" : "Login";
+      document.getElementById("authPrimaryBtn").setAttribute("onclick", isRegisterMode ? "register()" : "login()");
+      document.getElementById("authToggleBtn").innerText = isRegisterMode ? "Already have an account? Login" : "Need an account? Register";
+    }
+
+    async function register() {
+      const email = document.getElementById("authEmail").value;
+      const password = document.getElementById("authPassword").value;
+      if (!email || !password) return alert("Please enter both email and password.");
+      try {
+        await auth.createUserWithEmailAndPassword(email, password);
+        alert("Account registered successfully!");
+      } catch (err) { alert("Registration Error: " + err.message); }
+    }
+
+    async function login() {
+      const email = document.getElementById("authEmail").value;
+      const password = document.getElementById("authPassword").value;
+      if (!email || !password) return alert("Please enter both email and password.");
+      try {
+        await auth.signInWithEmailAndPassword(email, password);
+      } catch (err) { alert("Login Error: " + err.message); }
+    }
+
+    function logout() { auth.signOut(); }
+
+    function toggleRestrictedEmailInput() {
+      const accessLevel = document.getElementById("accessLevel").value;
+      const emailGroup = document.getElementById("restrictedEmailGroup");
+      if (accessLevel === "Restricted") {
+        emailGroup.classList.remove("hidden");
+      } else {
+        emailGroup.classList.add("hidden");
+      }
+    }
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = error => reject(error);
+      });
+    }
+
+    async function uploadFile() {
+      const statusDiv = document.getElementById("uploadStatus");
+      statusDiv.innerHTML = "";
+
+      if (!currentUser) {
+        statusDiv.innerHTML = "<span style='color:red;'>You must be logged in to upload files.</span>";
+        return;
+      }
+
+      const fileInput = document.getElementById("fileInput");
+      const file = fileInput.files[0];
+      const accessLevel = document.getElementById("accessLevel").value;
+      const allowedEmailElem = document.getElementById("allowedEmail");
+      const allowedEmail = allowedEmailElem ? allowedEmailElem.value.trim().toLowerCase() : "";
+
+      if (!file) {
+        statusDiv.innerHTML = "<span style='color:red;'>Please select a file first.</span>";
+        return;
+      }
+
+      if (file.size > 1048576) {
+        statusDiv.innerHTML = "<span style='color:red;'>File size exceeds 1 MB limit.</span>";
+        return;
+      }
+
+      if (accessLevel === "Restricted" && !allowedEmail) {
+        statusDiv.innerHTML = "<span style='color:red;'>Enter the allowed user email.</span>";
+        return;
+      }
+
+      // Step 1: Show uploading progress
+      statusDiv.innerHTML = "<span style='color:#007bff;'>⏳ Converting & uploading to Cloud Firestore...</span>";
+
+      try {
+        const fileId = "FILE_" + Date.now();
+        const base64Data = await fileToBase64(file);
+
+        // Set 60-day expiration date
+        const expiryDate = new Date();
+        expiryDate.setDate(expiryDate.getDate() + 60);
+
+        const payload = {
+          fileId: fileId,
+          fileName: file.name,
+          fileSize: (file.size / 1024).toFixed(2) + " KB",
+          accessLevel: accessLevel,
+          ownerUid: currentUser.uid,
+          ownerEmail: currentUser.email,
+          allowedEmail: accessLevel === "Restricted" ? allowedEmail : "",
+          fileData: base64Data,
+          uploadDate: new Date().toISOString(),
+          expirationDate: expiryDate.toISOString()
+        };
+
+        await db.collection("FileMetadata").doc(fileId).set(payload);
+
+        // Step 2: Update status message to success
+        statusDiv.innerHTML = "<span style='color:green;'>✅ File successfully uploaded!</span>";
+        fileInput.value = "";
+        
+        // Refresh list automatically
+        fetchFiles();
+
+        // Step 3: Clear status message after 3 seconds
+        setTimeout(() => { statusDiv.innerHTML = ""; }, 3000);
+
+      } catch (err) {
+        console.error("Upload Error:", err);
+        statusDiv.innerHTML = `<span style='color:red;'>Upload Failed: ${err.message}</span>`;
+      }
+    }
+
+    function copyShareLink(fileId) {
+      const shareUrl = `${window.location.origin}${window.location.pathname}?fileId=${fileId}`;
+
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(shareUrl)
+          .then(() => { alert("Sharable Link copied to clipboard!\n\n" + shareUrl); })
+          .catch(() => { prompt("Copy your sharable link below (Ctrl + C):", shareUrl); });
+      } else {
+        prompt("Copy your sharable link below (Ctrl + C):", shareUrl);
+      }
+    }
+
+    async function checkSharableLink() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const fileId = urlParams.get("fileId");
+
+      if (!fileId) return;
+
+      const sharedCard = document.getElementById("sharedLinkCard");
+      const detailsDiv = document.getElementById("sharedLinkDetails");
+      sharedCard.classList.remove("hidden");
+      detailsDiv.innerHTML = "⏳ Connecting to cloud and fetching shared file...";
+
+      try {
+        let doc = null;
+        for (let attempts = 0; attempts < 3; attempts++) {
+          try {
+            doc = await db.collection("FileMetadata").doc(fileId).get();
+            if (doc && doc.exists) break;
+          } catch (e) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+
+        if (!doc || !doc.exists) {
+          detailsDiv.innerHTML = "<span style='color:red;'>Error: File not found or has been deleted.</span>";
+          return;
+        }
+
+        const data = doc.data();
+        const now = new Date();
+        const expDate = new Date(data.expirationDate);
+        const isExpired = data.accessLevel === "TimeLimited" && now > expDate;
+
+        let canAccess = false;
+        let accessNote = "";
+
+        if (data.accessLevel === "Public") {
+          canAccess = true;
+        } else if (data.accessLevel === "Private") {
+          if (currentUser && currentUser.uid === data.ownerUid) {
+            canAccess = true;
+          } else {
+            accessNote = "Access Denied: Private file (Owner Only)";
+          }
+        } else if (data.accessLevel === "Restricted") {
+          if (currentUser && (currentUser.uid === data.ownerUid || currentUser.email.toLowerCase() === data.allowedEmail)) {
+            canAccess = true;
+          } else {
+            accessNote = currentUser ? "Access Denied: You are not authorized for this file." : "Login Required to view this file.";
+          }
+        } else if (data.accessLevel === "TimeLimited") {
+          if (!isExpired) {
+            canAccess = true;
+          } else {
+            accessNote = "Link Expired: 60 Days time limit has elapsed.";
+          }
+        }
+
+        if (canAccess) {
+          detailsDiv.innerHTML = `
+            <p><strong>File Name:</strong> ${data.fileName} (${data.fileSize})</p>
+            <p><strong>Access Level:</strong> <span class="badge bg-${data.accessLevel.toLowerCase()}">${data.accessLevel}</span></p>
+            <p><strong>Owner:</strong> ${data.ownerEmail}</p>
+            <a href="${data.fileData}" download="${data.fileName}"><button class="btn-success" style="width:auto; padding:8px 16px;">Download File Now</button></a>
+          `;
+        } else {
+          detailsDiv.innerHTML = `
+            <p><strong>File Name:</strong> ${data.fileName}</p>
+            <p style="color:red; font-weight:bold;">${accessNote}</p>
+          `;
+        }
+      } catch (err) {
+        console.error("Link Fetch Error:", err);
+        detailsDiv.innerHTML = `<span style='color:red;'>Error loading shared link: ${err.message}</span>`;
+      }
+    }
+
+    async function fetchFiles() {
+      const container = document.getElementById("fileList");
+      container.innerHTML = "Loading cloud records...";
+
+      try {
+        const snapshot = await db.collection("FileMetadata").get();
+        container.innerHTML = "";
+
+        if (snapshot.empty) {
+          container.innerHTML = "No files stored in repository.";
+          return;
+        }
+
+        snapshot.forEach(doc => {
+          const data = doc.data();
+          const now = new Date();
+          const expDate = new Date(data.expirationDate);
+          const isExpired = data.accessLevel === "TimeLimited" && now > expDate;
+
+          let canAccess = false;
+          let accessNote = "";
+
+          if (data.accessLevel === "Public") {
+            canAccess = true;
+          } else if (data.accessLevel === "Private") {
+            if (currentUser && currentUser.uid === data.ownerUid) {
+              canAccess = true;
+            } else {
+              accessNote = "Access Denied (Owner Only)";
+            }
+          } else if (data.accessLevel === "Restricted") {
+            if (currentUser && (currentUser.uid === data.ownerUid || currentUser.email.toLowerCase() === data.allowedEmail)) {
+              canAccess = true;
+            } else {
+              accessNote = currentUser ? "Access Denied (Permission Required)" : "Login Required";
+            }
+          } else if (data.accessLevel === "TimeLimited") {
+            if (!isExpired) {
+              canAccess = true;
+            } else {
+              accessNote = "Link Expired (60 Days Elapsed)";
+            }
+          }
+
+          const badgeClass = "bg-" + data.accessLevel.toLowerCase();
+          container.innerHTML += `
+            <div class="file-item">
+              <div>
+                <strong>${data.fileName}</strong> <small>(${data.fileSize})</small><br>
+                <span class="badge ${badgeClass}">${data.accessLevel}</span>
+                <small>Owner: ${data.ownerEmail}</small><br>
+                ${data.accessLevel === "TimeLimited" ? `<small style="color:#666;">Expires: ${expDate.toLocaleDateString()}</small>` : ""}
+              </div>
+              <div style="text-align: right;">
+                <button onclick="copyShareLink('${data.fileId}')" class="action-btn btn-secondary">Copy Link</button>
+                ${canAccess 
+                  ? `<a href="${data.fileData}" download="${data.fileName}"><button class="action-btn">Download</button></a>`
+                  : `<span style="color:#dc3545; font-size:12px; font-weight:bold; display:block;">${accessNote}</span>`}
+              </div>
+            </div>
+          `;
+        });
+      } catch (err) {
+        container.innerHTML = "Error loading files or permission denied.";
+      }
+    }
+  </script>
+</body>
+</html>
